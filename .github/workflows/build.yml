@@ -1,0 +1,45 @@
+name: build
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下載 BeeWare CPython 3.13 iOS 支援包
+        run: |
+          curl -sL -o /tmp/py.tar.gz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          tar xzf /tmp/py.tar.gz Python.xcframework
+          ls Python.xcframework
+      - name: 安裝 XcodeGen
+        run: brew install xcodegen
+      - name: 生成專案
+        run: xcodegen generate
+      - name: 構建（未簽名）
+        run: |
+          xcodebuild -project CPyTest.xcodeproj -scheme CPyTest -configuration Release \
+            -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            -derivedDataPath build build
+      - name: 後處理（官方 install_python：搬標準庫＋.so 轉 framework；未簽名版跳過 codesign，交 TrollStore 裝機時簽）
+        run: |
+          sed -i '' 's|^    /usr/bin/codesign.*|    echo "(unsigned: skip codesign)"|' Python.xcframework/build/utils.sh
+          export CODESIGNING_FOLDER_PATH="$PWD/build/Build/Products/Release-iphoneos/CPyTest.app"
+          export PROJECT_DIR="$PWD"
+          export EFFECTIVE_PLATFORM_NAME="-iphoneos"
+          export ARCHS="arm64"
+          export PLATFORM_FAMILY_NAME="iOS"
+          export PRODUCT_BUNDLE_IDENTIFIER="com.yongshuai.cpytest"
+          source Python.xcframework/build/utils.sh
+          install_python Python.xcframework
+          du -sh "$CODESIGNING_FOLDER_PATH"
+          ls "$CODESIGNING_FOLDER_PATH/python/lib"
+      - name: 打包 IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/CPyTest.app Payload/
+          zip -qry CPyTest-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CPyTest-unsigned-ipa
+          path: CPyTest-unsigned.ipa
